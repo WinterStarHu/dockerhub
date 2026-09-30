@@ -1,0 +1,8 @@
+*.tar
+.env
+# ollama 构建上下文大文件(由 build-and-export.sh 从容器提取,不进 git)
+ollama/ollama-bin
+ollama/ollama-lib/
+ollama/ollama-models/
+# 测试用 compose
+docker-compose.test.yml

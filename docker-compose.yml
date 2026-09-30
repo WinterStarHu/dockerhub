@@ -1,0 +1,59 @@
+# 内网 DB-GPT 部署:dbgpt + ollama(bge-m3)双容器
+# 用法:配好 .env 后 docker compose up -d
+services:
+  ollama:
+    image: dbgpt-ollama-cpu:intranet
+    container_name: dbgpt-ollama
+    ports:
+      - "11434:11434"
+    environment:
+      # 必须监听 0.0.0.0,dbgpt 容器才能通过 ollama:11434 连上(embedding + OCR)
+      - OLLAMA_HOST=0.0.0.0:11434
+    volumes:
+      # 模型用 bind-mount(bge-m3 + minicpm-v 文件在宿主机),换/加模型只需替换文件 + restart,不用重建镜像
+      - /data/ollama-models:/root/.ollama
+    restart: unless-stopped
+
+  dbgpt:
+    image: dbgpt-intranet:latest
+    container_name: dbgpt
+    ports:
+      - "5670:5670"
+    environment:
+      # ===== LLM:指向内网自建 OpenAI 兼容服务 =====
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME}
+      - LLM_MODEL_PROVIDER=proxy/openai
+      - OPENAI_API_BASE=${LLM_API_BASE}
+      - OPENAI_API_KEY=${LLM_API_KEY:-dbgpt}
+      # ===== embedding:指向 ollama 容器(bge-m3)=====
+      - EMBEDDING_MODEL_NAME=bge-m3
+      - EMBEDDING_MODEL_PROVIDER=proxy/ollama
+      - EMBEDDING_MODEL_API_URL=http://ollama:11434
+      # ===== traffic_guard 开关(内网默认关)=====
+      - TRAFFIC_GUARD_ENABLED=${TRAFFIC_GUARD_ENABLED:-false}
+      # ===== 本地多模态两阶段:MiniCPM-V(ollama)识图→内网LLM答题 =====
+      # 默认关;开了之后聊天里的图会先经 minicpm-v OCR 成文字,再喂给内网 LLM
+      - VISION_OCR_ENABLED=${VISION_OCR_ENABLED:-false}
+      - VISION_OCR_MODEL=${VISION_OCR_MODEL:-minicpm-v}
+      - VISION_OCR_API_URL=http://ollama:11434
+      # ===== 语言 =====
+      - DBGPT_LANG=zh
+    volumes:
+      # ChromaDB 向量库 + 元数据(dbgpt.db)持久化
+      - dbgpt-pilot:/app/pilot
+      # 知识库数据卷(只读):内网 git clone 到 /data/db_knowledge/
+      - /data/db_knowledge:/data/db_knowledge:ro
+      # DB-GPT 源码(git 管理):clone 你的 fork 到 /data/dbgpt-source,挂载进容器
+      # 改代码 → push 到 fork → 内网 git pull → docker compose restart dbgpt 生效
+      # 不挂载时用镜像内置源码;挂载时以宿主机 git 仓库为准
+      - /data/dbgpt-source/packages:/app/packages
+      # 可配置 traffic_guard(改完 restart 生效,不重建镜像)
+      - /data/dbgpt-patches/traffic_guard.py:/opt/.uv.venv/lib/python3.11/site-packages/traffic_guard.py
+      # 本地多模态 OCR 模块(识图→文字,改完 restart 生效,不重建镜像)
+      - /data/dbgpt-patches/vision_ocr.py:/opt/.uv.venv/lib/python3.11/site-packages/vision_ocr.py
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+volumes:
+  dbgpt-pilot:
